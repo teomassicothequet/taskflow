@@ -28,9 +28,70 @@ import grpc
 #   4. code : context.code() (None = OK ; exception non-abort = UNKNOWN)
 #   5. user : dict(handler_call_details.invocation_metadata).get("x-user")
 #   Pensez à print(..., flush=True).
+
 class LoggingInterceptor(grpc.ServerInterceptor):
     def intercept_service(self, continuation, handler_call_details):
-        raise NotImplementedError()
+        handler = continuation(handler_call_details)
+        if handler is None:
+            return None
+
+        method = handler_call_details.method
+        user = dict(handler_call_details.invocation_metadata).get("x-user")
+
+        def log(context, started):
+            code = context.code() or grpc.StatusCode.UNKNOWN
+            print(
+                f"[{datetime.now():%H:%M:%S}] {method} "
+                f"duration={(time.perf_counter() - started) * 1000:.0f}ms "
+                f"code={code.name} user={user}",
+                flush=True,
+            )
+
+        if handler.unary_unary:
+            def unary_unary(request, context):
+                started = time.perf_counter()
+                try:
+                    return handler.unary_unary(request, context)
+                finally:
+                    log(context, started)
+
+            return grpc.unary_unary_rpc_method_handler(
+                unary_unary, handler.request_deserializer, handler.response_serializer)
+
+        if handler.unary_stream:
+            def unary_stream(request, context):
+                started = time.perf_counter()
+                try:
+                    yield from handler.unary_stream(request, context)
+                finally:
+                    log(context, started)
+
+            return grpc.unary_stream_rpc_method_handler(
+                unary_stream, handler.request_deserializer, handler.response_serializer)
+
+        if handler.stream_unary:
+            def stream_unary(request_iterator, context):
+                started = time.perf_counter()
+                try:
+                    return handler.stream_unary(request_iterator, context)
+                finally:
+                    log(context, started)
+
+            return grpc.stream_unary_rpc_method_handler(
+                stream_unary, handler.request_deserializer, handler.response_serializer)
+
+        if handler.stream_stream:
+            def stream_stream(request_iterator, context):
+                started = time.perf_counter()
+                try:
+                    yield from handler.stream_stream(request_iterator, context)
+                finally:
+                    log(context, started)
+
+            return grpc.stream_stream_rpc_method_handler(
+                stream_stream, handler.request_deserializer, handler.response_serializer)
+
+        return handler
 
 
 # ---------- TODO(23) ----------
@@ -76,21 +137,3 @@ class _ClientCallDetails(
     pass
 
 
-class HeaderInterceptor(grpc.UnaryUnaryClientInterceptor,
-                        grpc.UnaryStreamClientInterceptor,
-                        grpc.StreamUnaryClientInterceptor,
-                        grpc.StreamStreamClientInterceptor):
-    def __init__(self, user: str):
-        self._user = user
-
-    def intercept_unary_unary(self, continuation, details, request):
-        raise NotImplementedError()
-
-    def intercept_unary_stream(self, continuation, details, request):
-        raise NotImplementedError()
-
-    def intercept_stream_unary(self, continuation, details, request_iterator):
-        raise NotImplementedError()
-
-    def intercept_stream_stream(self, continuation, details, request_iterator):
-        raise NotImplementedError()
