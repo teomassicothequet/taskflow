@@ -16,13 +16,6 @@ def print_event(event):
           end="", flush=True)
 
 
-# ---------- TODO(10) ----------
-# Thread d'écoute : s'abonner via
-#   stub.Subscribe(SubscribeRequest(username=..., event_types=[...]))
-# puis for event in stream: mémoriser dans received_events + print_event(event)
-# Entourez le tout d'un try/except grpc.RpcError : si le serveur tombe,
-# afficher UNE ligne propre (code + details), pas une traceback.
-# (CANCELLED = c'est nous qui quittons : ne rien afficher.)
 def listen_events(stub, username, event_types):
     try:
         request = taskflow_pb2.SubscribeRequest(username=username, event_types=event_types)
@@ -76,40 +69,41 @@ def main():
             choice = input("choix > ").strip()
             if choice == "1":
                 # ---------- TODO(11) ----------
-                # Demander title/description/assigné, appeler CreateTask
-                # (created_by=args.user, timeout=T), afficher l'id retourné.
                 title = input("Titre de la tâche : ").strip()
                 description = input("Description de la tâche : ").strip()
                 assigned_to = input("Assigné à (laisser vide pour non assignée) : ").strip() or None
+
                 request = taskflow_pb2.CreateTaskRequest(
                     title=title,
                     description=description,
                     assigned_to=assigned_to,
                     created_by=args.user
                 )
-                response = stub.CreateTask(request, timeout=T)
-                print(f"Tâche créée avec l'ID : {response.id}")
-                
+                task = stub.CreateTask(request, timeout=T)
+                print(f"Tâche créée avec l'ID : {task.id}")
+
             elif choice == "2":
                 # ---------- TODO(12) ----------
-                # Proposer un filtre statut (vide = tous) et un filtre
-                # assigné (vide = tous), appeler ListTasks en streaming.
-                # Filtre vide -> NE PAS affecter le champ optional.
                 status_filter = input("Filtrer par statut (TODO, IN_PROGRESS, DONE) ou laisser vide pour tous : ").strip().upper()
                 assigned_filter = input("Filtrer par assigné (laisser vide pour tous) : ").strip() or None
+
                 request = taskflow_pb2.ListTasksRequest()
                 if status_filter in STATUS_NAMES.values():
-                    request.status = taskflow_pb2.TaskStatus.Value(status_filter)
+                    # Attention au nom du champ selon votre schema proto (status_filter ou status)
+                    if hasattr(request, 'status_filter'):
+                        request.status_filter = taskflow_pb2.TaskStatus.Value(status_filter)
+                    else:
+                        request.status = taskflow_pb2.TaskStatus.Value(status_filter)
+
                 if assigned_filter:
                     request.assigned_to = assigned_filter
+
                 print("Liste des tâches :")
                 for task in stub.ListTasks(request, timeout=T):
                     print_task(task)
 
             elif choice == "3":
                 # ---------- TODO(13) ----------
-                # GetTask : afficher la tâche ET ses commentaires
-                # (auteur, date ISO via c.created_at.ToDatetime(), texte).
                 task_id = input("ID de la tâche à voir : ").strip()
                 request = taskflow_pb2.GetTaskRequest(id=task_id)
                 task = stub.GetTask(request, timeout=T)
@@ -118,11 +112,9 @@ def main():
                 for comment in task.comments:
                     created_at_iso = comment.created_at.ToDatetime().isoformat()
                     print(f"  - {comment.author} ({created_at_iso}) : {comment.text}")
-                
+
             elif choice == "4":
                 # ---------- TODO(14) ----------
-                # Menu TODO/IN_PROGRESS/DONE -> UpdateStatus
-                # (requested_by=args.user).
                 task_id = input("ID de la tâche à mettre à jour : ").strip()
                 print("Choisissez le nouveau statut :")
                 for code, name in STATUS_NAMES.items():
@@ -131,30 +123,36 @@ def main():
                 if new_status_code not in STATUS_NAMES:
                     print("Statut invalide.")
                     continue
-                request = taskflow_pb2.UpdateStatusRequest(
-                    id=task_id,
-                    new_status=new_status_code,
-                    requested_by=args.user
-                )
+
+                # Adaptation du nom du champ status dans UpdateStatusRequest
+                request_kwargs = {"id": task_id}
+                if hasattr(taskflow_pb2.UpdateStatusRequest, 'new_status'):
+                    request_kwargs["new_status"] = new_status_code
+                else:
+                    request_kwargs["status"] = new_status_code
+
+                if hasattr(taskflow_pb2.UpdateStatusRequest, 'requested_by'):
+                    request_kwargs["requested_by"] = args.user
+
+                request = taskflow_pb2.UpdateStatusRequest(**request_kwargs)
                 stub.UpdateStatus(request, timeout=T)
                 print("Statut mis à jour avec succès.")
 
             elif choice == "5":
                 # ---------- TODO(15) ----------
-                # AssignTask (requested_by=args.user).
                 task_id = input("ID de la tâche à réassigner : ").strip()
                 new_assigned_to = input("Nouvel assigné (laisser vide pour non assignée) : ").strip() or None
-                request = taskflow_pb2.AssignTaskRequest(
-                    id=task_id,
-                    new_assigned_to=new_assigned_to,
-                    requested_by=args.user
-                )
+
+                request_kwargs = {"id": task_id, "new_assigned_to": new_assigned_to}
+                if hasattr(taskflow_pb2.AssignTaskRequest, 'requested_by'):
+                    request_kwargs["requested_by"] = args.user
+
+                request = taskflow_pb2.AssignTaskRequest(**request_kwargs)
                 stub.AssignTask(request, timeout=T)
                 print("Assignation mise à jour avec succès.")
 
             elif choice == "6":
                 # ---------- TODO(16) ----------
-                # AddComment (texte multi-mots, author=args.user).
                 task_id = input("ID de la tâche à commenter : ").strip()
                 print("Entrez le texte du commentaire (finir par une ligne vide) :")
                 lines = []
@@ -164,6 +162,7 @@ def main():
                         break
                     lines.append(line)
                 comment_text = "\n".join(lines)
+
                 request = taskflow_pb2.AddCommentRequest(
                     id=task_id,
                     text=comment_text,
@@ -174,21 +173,20 @@ def main():
 
             elif choice == "7":
                 # ---------- TODO(17) ----------
-                # DeleteTask (requested_by=args.user).
                 task_id = input("ID de la tâche à supprimer : ").strip()
-                request = taskflow_pb2.DeleteTaskRequest(
-                    id=task_id,
-                    requested_by=args.user
-                )
+                
+                request_kwargs = {"id": task_id}
+                if hasattr(taskflow_pb2.DeleteTaskRequest, 'user'):
+                    request_kwargs["user"] = args.user
+                elif hasattr(taskflow_pb2.DeleteTaskRequest, 'requested_by'):
+                    request_kwargs["requested_by"] = args.user
+
+                request = taskflow_pb2.DeleteTaskRequest(**request_kwargs)
                 stub.DeleteTask(request, timeout=T)
                 print("Tâche supprimée avec succès.")
 
             elif choice == "8":
                 # ---------- TODO(18) ----------
-                # Client streaming : demander des mots-clés un par un
-                # (ligne vide = fin), construire un GÉNÉRATEUR Python qui
-                # yield les SearchEntry, appeler SearchKeywords(generator)
-                # et afficher le SearchSummary (total + résultats).
                 keywords = []
                 print("Entrez les mots-clés (ligne vide pour terminer) :")
                 while True:
@@ -197,15 +195,26 @@ def main():
                         break
                     keywords.append(keyword)
 
-                def search_entries():
+                def search_generator():
                     for keyword in keywords:
-                        yield taskflow_pb2.SearchEntry(keyword=keyword)
+                        # Adapte selon la structure attendue dans SearchTasksRequest / SearchEntry
+                        if hasattr(taskflow_pb2, 'SearchTasksRequest'):
+                            yield taskflow_pb2.SearchTasksRequest(keyword=keyword)
+                        elif hasattr(taskflow_pb2, 'SearchEntry'):
+                            yield taskflow_pb2.SearchEntry(keyword=keyword)
 
-                summary = stub.SearchKeywords(search_entries(), timeout=T)
-                print(f"Total : {summary.total}")
-                print("Résultats :")
-                for result in summary.results:
-                    print_task(result)
+                # Adapte la méthode stub selon la déclaration dans le proto (SearchTasks / SearchKeywords)
+                if hasattr(stub, 'SearchTasks'):
+                    stats = stub.SearchTasks(search_generator(), timeout=T)
+                    print(f"Total requêtes : {stats.total_requests}")
+                    for kw, count in stats.matches.items():
+                        print(f" - {kw} : {count} correspondance(s)")
+                elif hasattr(stub, 'SearchKeywords'):
+                    summary = stub.SearchKeywords(search_generator(), timeout=T)
+                    print(f"Total : {summary.total}")
+                    print("Résultats :")
+                    for result in summary.results:
+                        print_task(result)
 
             elif choice == "9":
                 print(f"{len(received_events)} événement(s) reçu(s)")
