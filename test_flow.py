@@ -163,6 +163,11 @@ def run_tests(stub, log_path):
 
     sub_channel.close()
 
+    # --- TODO(25) : Étape 5 — metadata x-user ---
+    with open(log_path) as f:
+        log_content = f.read()
+    assert "user=testeur" in log_content, "metadata x-user absente des logs serveur"
+    assert "code=NOT_FOUND" in log_content, "aucune ligne code=NOT_FOUND dans les logs"
 
 def main():
     log = tempfile.NamedTemporaryFile("w+", suffix=".log", delete=False)
